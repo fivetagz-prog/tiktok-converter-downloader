@@ -10,7 +10,6 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Helper to sanitize TikTok JSON URLs
 function sanitizeUrl(url) {
   if (!url) return '';
   return url
@@ -26,7 +25,7 @@ function formatDuration(seconds) {
   return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
 }
 
-// 1. CONVERT / EXTRACTOR ROUTE
+// 1. EXTRACTOR / CONVERT ROUTE
 app.post('/api/convert', async (req, res) => {
   try {
     const { url } = req.body || {};
@@ -35,7 +34,7 @@ app.post('/api/convert', async (req, res) => {
       return res.status(400).json({ success: false, error: "Please provide a valid TikTok URL." });
     }
 
-    // Primary Method: Fallback API for maximum reliability against IP blocks
+    // Method 1: API Extractor (Highest success rate against datacenter blocks)
     try {
       const apiRes = await axios.post('https://www.tikwm.com/api/', new URLSearchParams({ url, hd: 1 }), {
         headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
@@ -46,18 +45,18 @@ app.post('/api/convert', async (req, res) => {
         const d = apiRes.data.data;
         return res.json({
           success: true,
-          downloadUrl: d.play || d.wmplay,
+          downloadUrl: sanitizeUrl(d.play || d.wmplay),
           title: d.title || "TikTok Video",
           author: `@${d.author?.unique_id || d.author?.nickname || 'tiktok_user'}`,
-          cover: d.cover || d.origin_cover || '',
+          cover: sanitizeUrl(d.cover || d.origin_cover || ''),
           duration: formatDuration(d.duration)
         });
       }
     } catch (apiErr) {
-      console.warn('TikWM API failed, attempting direct HTML scraping fallback...');
+      console.warn('TikWM API failed, attempting direct HTML scrape...');
     }
 
-    // Secondary Method: Direct Web Scraping
+    // Method 2: Direct HTML Scraping Fallback
     const initialResponse = await axios.get(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
@@ -78,11 +77,11 @@ app.post('/api/convert', async (req, res) => {
     }
 
     if (!itemData) {
-      return res.status(404).json({ success: false, error: "Unable to extract video details. Check link or privacy settings." });
+      return res.status(404).json({ success: false, error: "Unable to extract video details. Check URL or privacy settings." });
     }
 
     const rawPlayUrl = itemData.video?.playAddr || itemData.video?.downloadAddr || '';
-    
+
     return res.json({
       success: true,
       downloadUrl: sanitizeUrl(rawPlayUrl),
@@ -98,7 +97,7 @@ app.post('/api/convert', async (req, res) => {
   }
 });
 
-// 2. DOWNLOAD STREAM PROXY ROUTE
+// 2. DOWNLOAD STREAM PROXY ROUTE (Pipes stream OR falls back to 302 redirect)
 app.get('/api/download', async (req, res) => {
   const { videoUrl } = req.query;
 
@@ -115,15 +114,14 @@ app.get('/api/download', async (req, res) => {
       responseType: 'stream',
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-        'Referer': 'https://www.tiktok.com/',
-        'Range': 'bytes=0-'
+        'Referer': 'https://www.tiktok.com/'
       },
-      timeout: 15000
+      timeout: 8000
     });
 
     const contentType = response.headers['content-type'] || '';
     if (contentType.includes('text/html')) {
-      return res.status(403).json({ success: false, error: 'TikTok CDN blocked stream request.' });
+      return res.redirect(302, cleanedUrl);
     }
 
     res.setHeader('Content-Type', 'video/mp4');
@@ -132,8 +130,8 @@ app.get('/api/download', async (req, res) => {
     response.data.pipe(res);
 
   } catch (error) {
-    console.error('Proxy Download Error:', error.message);
-    return res.status(500).json({ success: false, error: 'Failed to stream video file.' });
+    console.warn('Proxy Download blocked by CDN, executing 302 browser redirect...');
+    return res.redirect(302, cleanedUrl);
   }
 });
 

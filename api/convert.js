@@ -10,7 +10,7 @@ const HEADERS = {
 };
 
 function formatDuration(seconds) {
-  if (!seconds || isNaN(seconds)) return "00:00";
+  if (!seconds || isNaN(seconds) || seconds <= 0) return "N/A";
   const mins = Math.floor(seconds / 60);
   const secs = Math.floor(seconds % 60);
   return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
@@ -40,6 +40,7 @@ export default async function handler(req, res) {
       return res.status(400).json({ success: false, error: 'Please provide a valid TikTok URL.' });
     }
 
+    // Follow redirect for short links (e.g. vt.tiktok.com)
     const initialResponse = await axios.get(url, {
       headers: HEADERS,
       maxRedirects: 5,
@@ -49,6 +50,7 @@ export default async function handler(req, res) {
     const html = initialResponse.data;
     let itemData = null;
 
+    // Method 1: Extraction from UNIVERSAL_DATA_FOR_REHYDRATION
     const rehydrationMatch = html.match(/<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__" type="application\/json">(.*?)<\/script>/s);
     if (rehydrationMatch) {
       try {
@@ -56,10 +58,11 @@ export default async function handler(req, res) {
         const defaultScope = parsed.__DEFAULT_SCOPE__ || {};
         itemData = defaultScope['webapp.video-detail']?.itemInfo?.itemStruct;
       } catch (e) {
-        console.warn('Rehydration parse failed');
+        console.warn('Rehydration JSON parse failed');
       }
     }
 
+    // Method 2: Extraction from SIGI_STATE
     if (!itemData) {
       const sigiMatch = html.match(/<script id="SIGI_STATE" type="application\/json">(.*?)<\/script>/s);
       if (sigiMatch) {
@@ -69,7 +72,7 @@ export default async function handler(req, res) {
           const firstKey = Object.keys(itemModule)[0];
           itemData = itemModule[firstKey];
         } catch (e) {
-          console.warn('SIGI_STATE parse failed');
+          console.warn('SIGI_STATE JSON parse failed');
         }
       }
     }
@@ -81,15 +84,26 @@ export default async function handler(req, res) {
       });
     }
 
-    const playUrl = itemData.video?.playAddr || itemData.video?.downloadAddr;
+    // Fallback extraction for MP4 URL
+    const playUrl = 
+      itemData.video?.playAddr || 
+      itemData.video?.downloadAddr || 
+      itemData.video?.bitrateInfo?.[0]?.PlayAddr?.UrlList?.[0] || 
+      null;
+
+    // Robust duration extraction (Handles seconds vs milliseconds)
+    let rawDuration = Number(itemData.video?.duration || 0);
+    if (rawDuration > 1000) {
+      rawDuration = Math.floor(rawDuration / 1000);
+    }
 
     return res.status(200).json({
       success: true,
-      downloadUrl: playUrl || null,
+      downloadUrl: playUrl,
       title: itemData.desc || 'TikTok Video',
       author: `@${itemData.author?.uniqueId || itemData.author?.nickname || 'tiktok_user'}`,
-      cover: itemData.video?.cover || itemData.video?.originCover || itemData.video?.dynamicCover,
-      duration: formatDuration(itemData.video?.duration)
+      cover: itemData.video?.cover || itemData.video?.originCover || itemData.video?.dynamicCover || '',
+      duration: formatDuration(rawDuration)
     });
 
   } catch (error) {

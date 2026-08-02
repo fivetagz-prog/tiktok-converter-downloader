@@ -13,7 +13,10 @@ app.use(express.static(path.join(__dirname, 'public')));
 const HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
   'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-  'Accept-Language': 'en-US,en;q=0.9'
+  'Accept-Language': 'en-US,en;q=0.9',
+  'Sec-Fetch-Dest': 'document',
+  'Sec-Fetch-Mode': 'navigate',
+  'Sec-Fetch-Site': 'none'
 };
 
 function formatDuration(seconds) {
@@ -23,6 +26,7 @@ function formatDuration(seconds) {
   return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
 }
 
+// 1. EXTRACTOR ROUTE
 app.post('/api/convert', async (req, res) => {
   try {
     const { url } = req.body || {};
@@ -40,6 +44,7 @@ app.post('/api/convert', async (req, res) => {
     const html = initialResponse.data;
     let itemData = null;
 
+    // Extraction Method 1: Rehydration Data
     const rehydrationMatch = html.match(/<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__" type="application\/json">(.*?)<\/script>/s);
     if (rehydrationMatch) {
       try {
@@ -51,6 +56,7 @@ app.post('/api/convert', async (req, res) => {
       }
     }
 
+    // Extraction Method 2: SIGI_STATE
     if (!itemData) {
       const sigiMatch = html.match(/<script id="SIGI_STATE" type="application\/json">(.*?)<\/script>/s);
       if (sigiMatch) {
@@ -101,35 +107,51 @@ app.post('/api/convert', async (req, res) => {
   }
 });
 
-// DOWNLOAD PROXY ROUTE
+// 2. STREAM PROXY ROUTE (Fixes .mp4.html issues)
 app.get('/api/download', async (req, res) => {
   const { videoUrl } = req.query;
 
   if (!videoUrl) {
-    return res.status(400).send('Missing video URL.');
+    return res.status(400).json({ success: false, error: 'Missing video URL parameter.' });
   }
 
   try {
+    const decodedUrl = decodeURIComponent(videoUrl);
+
     const response = await axios({
       method: 'get',
-      url: decodeURIComponent(videoUrl),
+      url: decodedUrl,
       responseType: 'stream',
       headers: {
         'User-Agent': HEADERS['User-Agent'],
-        'Referer': 'https://www.tiktok.com/'
+        'Referer': 'https://www.tiktok.com/',
+        'Origin': 'https://www.tiktok.com',
+        'Range': 'bytes=0-'
       }
     });
+
+    const contentType = response.headers['content-type'] || '';
+    if (contentType.includes('text/html')) {
+      return res.status(403).json({ 
+        success: false, 
+        error: 'TikTok blocked the server IP from streaming this file.' 
+      });
+    }
 
     res.setHeader('Content-Type', 'video/mp4');
     res.setHeader('Content-Disposition', 'attachment; filename="tiktok_video.mp4"');
 
     response.data.pipe(res);
+
   } catch (error) {
-    console.error('Download Proxy Error:', error.message);
-    res.status(500).send('Failed to stream video.');
+    console.error('Proxy Download Error:', error.message);
+    return res.status(500).json({ 
+      success: false, 
+      error: 'Failed to retrieve video stream from TikTok.' 
+    });
   }
 });
 
 app.listen(PORT, () => {
-  console.log(`TikTok Downloader Server running at http://localhost:${PORT}`);
+  console.log(`TikTok Converter Server active on http://localhost:${PORT}`);
 });

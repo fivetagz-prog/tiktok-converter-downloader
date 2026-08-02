@@ -10,23 +10,23 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-const HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-  'Accept-Language': 'en-US,en;q=0.9',
-  'Sec-Fetch-Dest': 'document',
-  'Sec-Fetch-Mode': 'navigate',
-  'Sec-Fetch-Site': 'none'
-};
+// Helper to sanitize TikTok JSON URLs
+function sanitizeUrl(url) {
+  if (!url) return '';
+  return url
+    .replace(/\\/g, '')
+    .replace(/\\u0026/g, '&')
+    .replace(/&amp;/g, '&');
+}
 
 function formatDuration(seconds) {
-  if (!seconds || isNaN(seconds) || seconds <= 0) return "N/A";
+  if (!seconds || isNaN(seconds) || seconds <= 0) return "00:00";
   const mins = Math.floor(seconds / 60);
   const secs = Math.floor(seconds % 60);
   return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
 }
 
-// 1. EXTRACTOR ROUTE
+// 1. CONVERT / EXTRACTOR ROUTE
 app.post('/api/convert', async (req, res) => {
   try {
     const { url } = req.body || {};
@@ -35,79 +35,70 @@ app.post('/api/convert', async (req, res) => {
       return res.status(400).json({ success: false, error: "Please provide a valid TikTok URL." });
     }
 
+    // Primary Method: Fallback API for maximum reliability against IP blocks
+    try {
+      const apiRes = await axios.post('https://www.tikwm.com/api/', new URLSearchParams({ url, hd: 1 }), {
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+        timeout: 8000
+      });
+
+      if (apiRes.data && apiRes.data.code === 0 && apiRes.data.data) {
+        const d = apiRes.data.data;
+        return res.json({
+          success: true,
+          downloadUrl: d.play || d.wmplay,
+          title: d.title || "TikTok Video",
+          author: `@${d.author?.unique_id || d.author?.nickname || 'tiktok_user'}`,
+          cover: d.cover || d.origin_cover || '',
+          duration: formatDuration(d.duration)
+        });
+      }
+    } catch (apiErr) {
+      console.warn('TikWM API failed, attempting direct HTML scraping fallback...');
+    }
+
+    // Secondary Method: Direct Web Scraping
     const initialResponse = await axios.get(url, {
-      headers: HEADERS,
-      maxRedirects: 5,
-      validateStatus: (status) => status >= 200 && status < 400
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        'Referer': 'https://www.tiktok.com/'
+      },
+      maxRedirects: 5
     });
 
     const html = initialResponse.data;
     let itemData = null;
 
-    // Extraction Method 1: Rehydration Data
     const rehydrationMatch = html.match(/<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__" type="application\/json">(.*?)<\/script>/s);
     if (rehydrationMatch) {
       try {
         const parsed = JSON.parse(rehydrationMatch[1]);
-        const defaultScope = parsed.__DEFAULT_SCOPE__ || {};
-        itemData = defaultScope['webapp.video-detail']?.itemInfo?.itemStruct;
-      } catch (e) {
-        console.warn("Rehydration parse failed");
-      }
-    }
-
-    // Extraction Method 2: SIGI_STATE
-    if (!itemData) {
-      const sigiMatch = html.match(/<script id="SIGI_STATE" type="application\/json">(.*?)<\/script>/s);
-      if (sigiMatch) {
-        try {
-          const parsed = JSON.parse(sigiMatch[1]);
-          const itemModule = parsed.ItemModule || {};
-          const firstKey = Object.keys(itemModule)[0];
-          itemData = itemModule[firstKey];
-        } catch (e) {
-          console.warn("SIGI_STATE parse failed");
-        }
-      }
+        itemData = parsed.__DEFAULT_SCOPE__?.['webapp.video-detail']?.itemInfo?.itemStruct;
+      } catch (e) {}
     }
 
     if (!itemData) {
-      return res.status(404).json({
-        success: false,
-        error: "Unable to extract video details. The video might be private or deleted."
-      });
+      return res.status(404).json({ success: false, error: "Unable to extract video details. Check link or privacy settings." });
     }
 
-    const playUrl = 
-      itemData.video?.playAddr || 
-      itemData.video?.downloadAddr || 
-      itemData.video?.bitrateInfo?.[0]?.PlayAddr?.UrlList?.[0] || 
-      null;
-
-    let rawDuration = Number(itemData.video?.duration || 0);
-    if (rawDuration > 1000) {
-      rawDuration = Math.floor(rawDuration / 1000);
-    }
-
+    const rawPlayUrl = itemData.video?.playAddr || itemData.video?.downloadAddr || '';
+    
     return res.json({
       success: true,
-      downloadUrl: playUrl,
+      downloadUrl: sanitizeUrl(rawPlayUrl),
       title: itemData.desc || "TikTok Video",
-      author: `@${itemData.author?.uniqueId || itemData.author?.nickname || 'tiktok_user'}`,
-      cover: itemData.video?.cover || itemData.video?.originCover || itemData.video?.dynamicCover || '',
-      duration: formatDuration(rawDuration)
+      author: `@${itemData.author?.uniqueId || 'tiktok_user'}`,
+      cover: sanitizeUrl(itemData.video?.cover || ''),
+      duration: formatDuration(itemData.video?.duration)
     });
 
   } catch (error) {
     console.error("TikTok Extractor Error:", error.message);
-    return res.status(500).json({
-      success: false,
-      error: "An error occurred while converting the TikTok video."
-    });
+    return res.status(500).json({ success: false, error: "Failed to process TikTok URL." });
   }
 });
 
-// 2. STREAM PROXY ROUTE (Fixes .mp4.html issues)
+// 2. DOWNLOAD STREAM PROXY ROUTE
 app.get('/api/download', async (req, res) => {
   const { videoUrl } = req.query;
 
@@ -115,27 +106,24 @@ app.get('/api/download', async (req, res) => {
     return res.status(400).json({ success: false, error: 'Missing video URL parameter.' });
   }
 
-  try {
-    const decodedUrl = decodeURIComponent(videoUrl);
+  const cleanedUrl = sanitizeUrl(decodeURIComponent(videoUrl));
 
+  try {
     const response = await axios({
       method: 'get',
-      url: decodedUrl,
+      url: cleanedUrl,
       responseType: 'stream',
       headers: {
-        'User-Agent': HEADERS['User-Agent'],
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
         'Referer': 'https://www.tiktok.com/',
-        'Origin': 'https://www.tiktok.com',
         'Range': 'bytes=0-'
-      }
+      },
+      timeout: 15000
     });
 
     const contentType = response.headers['content-type'] || '';
     if (contentType.includes('text/html')) {
-      return res.status(403).json({ 
-        success: false, 
-        error: 'TikTok blocked the server IP from streaming this file.' 
-      });
+      return res.status(403).json({ success: false, error: 'TikTok CDN blocked stream request.' });
     }
 
     res.setHeader('Content-Type', 'video/mp4');
@@ -145,13 +133,10 @@ app.get('/api/download', async (req, res) => {
 
   } catch (error) {
     console.error('Proxy Download Error:', error.message);
-    return res.status(500).json({ 
-      success: false, 
-      error: 'Failed to retrieve video stream from TikTok.' 
-    });
+    return res.status(500).json({ success: false, error: 'Failed to stream video file.' });
   }
 });
 
 app.listen(PORT, () => {
-  console.log(`TikTok Converter Server active on http://localhost:${PORT}`);
+  console.log(`TikTok Converter Server listening on port ${PORT}`);
 });

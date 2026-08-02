@@ -22,15 +22,15 @@ export default async function handler(req, res) {
       responseType: 'arraybuffer',
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-        'Referer': 'https://www.tiktok.com/'
+        'Referer': 'https://www.tikwm.com/'
       },
       timeout: 20000
     });
 
     const buffer = Buffer.from(response.data);
 
-    const sampleHeader = buffer.toString('utf8', 0, 100);
-    if (sampleHeader.includes('<html') || sampleHeader.includes('<!DOCTYPE')) {
+    const headerText = buffer.toString('utf8', 0, 100);
+    if (headerText.includes('<html') || headerText.includes('<!DOCTYPE') || headerText.includes('{"code"')) {
       return res.status(403).json({ success: false, error: 'TikTok CDN blocked server response.' });
     }
 
@@ -41,7 +41,7 @@ export default async function handler(req, res) {
     return res.send(buffer);
 
   } catch (error) {
-    console.error('Vercel Buffer Download Error:', error.message);
-    return res.status(500).json({ success: false, error: 'Failed to retrieve full video binary.' });
+    console.error('Vercel Download Error:', error.message);
+    return res.status(500).json({ success: false, error: 'Failed to retrieve video binary.' });
   }
 }

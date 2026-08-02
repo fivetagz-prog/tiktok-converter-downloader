@@ -17,7 +17,6 @@ function formatDuration(seconds) {
 }
 
 export default async function handler(req, res) {
-  // Allow CORS requests
   res.setHeader('Access-Control-Allow-Credentials', true);
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,POST');
@@ -41,7 +40,6 @@ export default async function handler(req, res) {
       return res.status(400).json({ success: false, error: 'Please provide a valid TikTok URL.' });
     }
 
-    // Resolve redirection (e.g. vt.tiktok.com -> full video URL)
     const initialResponse = await axios.get(url, {
       headers: HEADERS,
       maxRedirects: 5,
@@ -51,7 +49,6 @@ export default async function handler(req, res) {
     const html = initialResponse.data;
     let itemData = null;
 
-    // Method 1: Universal Data rehydration
     const rehydrationMatch = html.match(/<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__" type="application\/json">(.*?)<\/script>/s);
     if (rehydrationMatch) {
       try {
@@ -63,7 +60,6 @@ export default async function handler(req, res) {
       }
     }
 
-    // Method 2: Fallback to SIGI_STATE
     if (!itemData) {
       const sigiMatch = html.match(/<script id="SIGI_STATE" type="application\/json">(.*?)<\/script>/s);
       if (sigiMatch) {

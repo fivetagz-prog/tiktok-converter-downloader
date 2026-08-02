@@ -18,29 +18,30 @@ export default async function handler(req, res) {
   const cleanedUrl = sanitizeUrl(decodeURIComponent(videoUrl));
 
   try {
-    const response = await axios({
-      method: 'get',
-      url: cleanedUrl,
-      responseType: 'stream',
+    const response = await axios.get(cleanedUrl, {
+      responseType: 'arraybuffer',
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
         'Referer': 'https://www.tiktok.com/'
       },
-      timeout: 8000
+      timeout: 20000
     });
 
-    const contentType = response.headers['content-type'] || '';
-    if (contentType.includes('text/html')) {
-      return res.redirect(302, cleanedUrl);
+    const buffer = Buffer.from(response.data);
+
+    const sampleHeader = buffer.toString('utf8', 0, 100);
+    if (sampleHeader.includes('<html') || sampleHeader.includes('<!DOCTYPE')) {
+      return res.status(403).json({ success: false, error: 'TikTok CDN blocked server response.' });
     }
 
     res.setHeader('Content-Type', 'video/mp4');
-    res.setHeader('Content-Disposition', 'attachment; filename="tiktok_video.mp4"');
+    res.setHeader('Content-Length', buffer.length);
+    res.setHeader('Content-Disposition', `attachment; filename="tiktok_${Date.now()}.mp4"`);
 
-    response.data.pipe(res);
+    return res.send(buffer);
 
   } catch (error) {
-    console.warn('Vercel direct stream blocked, executing 302 redirect fallback to CDN...');
-    return res.redirect(302, cleanedUrl);
+    console.error('Vercel Buffer Download Error:', error.message);
+    return res.status(500).json({ success: false, error: 'Failed to retrieve full video binary.' });
   }
 }

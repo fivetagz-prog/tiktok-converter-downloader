@@ -289,6 +289,7 @@
       }
     });
 
+    // Client-side direct stream fetch avoids Vercel server memory payload limits
     downloadBtn.addEventListener('click', async () => {
       if (!currentDownloadUrl) return;
 
@@ -297,20 +298,15 @@
       errorBox.classList.add('hidden');
 
       try {
-        const downloadEndpoint = `/api/download?videoUrl=${encodeURIComponent(currentDownloadUrl)}`;
-        const res = await fetch(downloadEndpoint);
-        const contentType = res.headers.get('content-type') || '';
-
-        // Prevent saving JSON response errors as corrupted .mp4.json files
-        if (contentType.includes('application/json') || !res.ok) {
-          const errData = await res.json().catch(() => ({}));
-          throw new Error(errData.error || 'Server failed to download video file.');
-        }
-
-        const blob = await res.blob();
+        // Fetch binary directly in browser (bypasses Vercel 4.5MB limit)
+        const response = await fetch(currentDownloadUrl);
         
+        if (!response.ok) throw new Error('Direct stream blocked by CDN.');
+
+        const blob = await response.blob();
+
         if (blob.size < 10000) {
-          throw new Error('Downloaded file is incomplete or corrupted.');
+          throw new Error('Retrieved file is empty.');
         }
 
         const blobUrl = window.URL.createObjectURL(blob);
@@ -323,8 +319,9 @@
         window.URL.revokeObjectURL(blobUrl);
 
       } catch (err) {
-        errorMessage.textContent = `Download Error: ${err.message}`;
-        errorBox.classList.remove('hidden');
+        // Native window trigger fallback if browser fetch hits cross-origin block
+        console.warn('Browser blob fetch failed, triggering direct stream fallback:', err.message);
+        window.open(currentDownloadUrl, '_blank');
       } finally {
         downloadBtn.disabled = false;
         downloadBtnText.textContent = 'Download MP4 Video';

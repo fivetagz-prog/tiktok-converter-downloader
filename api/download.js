@@ -24,15 +24,14 @@ export default async function handler(req, res) {
       responseType: 'stream',
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-        'Referer': 'https://www.tiktok.com/',
-        'Range': 'bytes=0-'
+        'Referer': 'https://www.tiktok.com/'
       },
-      timeout: 15000
+      timeout: 8000
     });
 
     const contentType = response.headers['content-type'] || '';
     if (contentType.includes('text/html')) {
-      return res.status(403).json({ success: false, error: 'TikTok CDN blocked stream request.' });
+      return res.redirect(302, cleanedUrl);
     }
 
     res.setHeader('Content-Type', 'video/mp4');
@@ -41,7 +40,7 @@ export default async function handler(req, res) {
     response.data.pipe(res);
 
   } catch (error) {
-    console.error('Vercel Proxy Download Error:', error.message);
-    return res.status(500).json({ success: false, error: 'Failed to retrieve stream from TikTok CDN.' });
+    console.warn('Vercel direct stream blocked, executing 302 redirect fallback to CDN...');
+    return res.redirect(302, cleanedUrl);
   }
 }

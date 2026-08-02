@@ -20,7 +20,7 @@ const HEADERS = {
 };
 
 function formatDuration(seconds) {
-  if (!seconds || isNaN(seconds)) return "00:00";
+  if (!seconds || isNaN(seconds) || seconds <= 0) return "N/A";
   const mins = Math.floor(seconds / 60);
   const secs = Math.floor(seconds % 60);
   return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
@@ -75,15 +75,24 @@ app.post('/api/convert', async (req, res) => {
       });
     }
 
-    const playUrl = itemData.video?.playAddr || itemData.video?.downloadAddr;
+    const playUrl = 
+      itemData.video?.playAddr || 
+      itemData.video?.downloadAddr || 
+      itemData.video?.bitrateInfo?.[0]?.PlayAddr?.UrlList?.[0] || 
+      null;
+
+    let rawDuration = Number(itemData.video?.duration || 0);
+    if (rawDuration > 1000) {
+      rawDuration = Math.floor(rawDuration / 1000);
+    }
 
     return res.json({
       success: true,
-      downloadUrl: playUrl || null,
+      downloadUrl: playUrl,
       title: itemData.desc || "TikTok Video",
       author: `@${itemData.author?.uniqueId || itemData.author?.nickname || 'tiktok_user'}`,
-      cover: itemData.video?.cover || itemData.video?.originCover || itemData.video?.dynamicCover,
-      duration: formatDuration(itemData.video?.duration)
+      cover: itemData.video?.cover || itemData.video?.originCover || itemData.video?.dynamicCover || '',
+      duration: formatDuration(rawDuration)
     });
 
   } catch (error) {

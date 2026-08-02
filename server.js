@@ -25,7 +25,7 @@ function formatDuration(seconds) {
   return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
 }
 
-// 1. EXTRACTOR / CONVERT ROUTE
+// 1. EXTRACTOR ROUTE
 app.post('/api/convert', async (req, res) => {
   try {
     const { url } = req.body || {};
@@ -34,65 +34,29 @@ app.post('/api/convert', async (req, res) => {
       return res.status(400).json({ success: false, error: "Please provide a valid TikTok URL." });
     }
 
-    // Method 1: TikWM API (Extracts clean, direct play links)
-    try {
-      const apiRes = await axios.post('https://www.tikwm.com/api/', new URLSearchParams({ url, hd: 1 }), {
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
-        timeout: 10000
-      });
+    const apiRes = await axios.post('https://www.tikwm.com/api/', new URLSearchParams({ url, hd: 1 }), {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+      timeout: 10000
+    });
 
-      if (apiRes.data && apiRes.data.code === 0 && apiRes.data.data) {
-        const d = apiRes.data.data;
-        // TikWM play host link or original play link
-        const playLink = d.play.startsWith('http') ? d.play : `https://www.tikwm.com${d.play}`;
-        
-        return res.json({
-          success: true,
-          downloadUrl: sanitizeUrl(playLink),
-          title: d.title || "TikTok Video",
-          author: `@${d.author?.unique_id || d.author?.nickname || 'tiktok_user'}`,
-          cover: sanitizeUrl(d.cover || d.origin_cover || ''),
-          duration: formatDuration(d.duration)
-        });
+    if (apiRes.data && apiRes.data.code === 0 && apiRes.data.data) {
+      const d = apiRes.data.data;
+      let playLink = d.play || d.wmplay;
+      if (playLink && !playLink.startsWith('http')) {
+        playLink = `https://www.tikwm.com${playLink}`;
       }
-    } catch (apiErr) {
-      console.warn('TikWM API failed, falling back to direct HTML parse...');
+
+      return res.json({
+        success: true,
+        downloadUrl: sanitizeUrl(playLink),
+        title: d.title || "TikTok Video",
+        author: `@${d.author?.unique_id || d.author?.nickname || 'tiktok_user'}`,
+        cover: sanitizeUrl(d.cover || d.origin_cover || ''),
+        duration: formatDuration(d.duration)
+      });
     }
 
-    // Method 2: Direct Scrape Fallback
-    const initialResponse = await axios.get(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-        'Referer': 'https://www.tiktok.com/'
-      },
-      maxRedirects: 5
-    });
-
-    const html = initialResponse.data;
-    let itemData = null;
-
-    const rehydrationMatch = html.match(/<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__" type="application\/json">(.*?)<\/script>/s);
-    if (rehydrationMatch) {
-      try {
-        const parsed = JSON.parse(rehydrationMatch[1]);
-        itemData = parsed.__DEFAULT_SCOPE__?.['webapp.video-detail']?.itemInfo?.itemStruct;
-      } catch (e) {}
-    }
-
-    if (!itemData) {
-      return res.status(404).json({ success: false, error: "Unable to extract video details. Check URL." });
-    }
-
-    const rawPlayUrl = itemData.video?.playAddr || itemData.video?.downloadAddr || '';
-
-    return res.json({
-      success: true,
-      downloadUrl: sanitizeUrl(rawPlayUrl),
-      title: itemData.desc || "TikTok Video",
-      author: `@${itemData.author?.uniqueId || 'tiktok_user'}`,
-      cover: sanitizeUrl(itemData.video?.cover || ''),
-      duration: formatDuration(itemData.video?.duration)
-    });
+    return res.status(400).json({ success: false, error: "Unable to extract video details. Check link." });
 
   } catch (error) {
     console.error("TikTok Extractor Error:", error.message);
@@ -100,7 +64,7 @@ app.post('/api/convert', async (req, res) => {
   }
 });
 
-// 2. BUFFERED BINARY DOWNLOAD PROXY ROUTE (Fixes 0:00 empty video issue)
+// 2. BINARY DOWNLOAD PROXY ROUTE
 app.get('/api/download', async (req, res) => {
   const { videoUrl } = req.query;
 
@@ -111,22 +75,21 @@ app.get('/api/download', async (req, res) => {
   const cleanedUrl = sanitizeUrl(decodeURIComponent(videoUrl));
 
   try {
-    // Fetch full video into buffer to guarantee complete byte delivery
     const response = await axios.get(cleanedUrl, {
       responseType: 'arraybuffer',
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-        'Referer': 'https://www.tiktok.com/'
+        'Referer': 'https://www.tikwm.com/'
       },
       timeout: 25000
     });
 
     const buffer = Buffer.from(response.data);
 
-    // Check if CDN returned an HTML error page instead of video binary
-    const sampleHeader = buffer.toString('utf8', 0, 100);
-    if (sampleHeader.includes('<html') || sampleHeader.includes('<!DOCTYPE')) {
-      return res.status(403).json({ success: false, error: 'TikTok CDN blocked the binary download.' });
+    // Verify binary data (Ensure TikTok CDN didn't return HTML/JSON error text)
+    const headerText = buffer.toString('utf8', 0, 100);
+    if (headerText.includes('<html') || headerText.includes('<!DOCTYPE') || headerText.includes('{"code"')) {
+      return res.status(403).json({ success: false, error: 'TikTok CDN blocked the video stream.' });
     }
 
     res.setHeader('Content-Type', 'video/mp4');
@@ -137,10 +100,10 @@ app.get('/api/download', async (req, res) => {
 
   } catch (error) {
     console.error('Buffer Download Error:', error.message);
-    return res.status(500).json({ success: false, error: 'Failed to download complete video binary.' });
+    return res.status(500).json({ success: false, error: 'Failed to retrieve complete video binary from server.' });
   }
 });
 
 app.listen(PORT, () => {
-  console.log(`TikTok Converter Server listening on port ${PORT}`);
+  console.log(`TikTok Converter Server running on port ${PORT}`);
 });

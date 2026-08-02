@@ -13,10 +13,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 const HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
   'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-  'Accept-Language': 'en-US,en;q=0.9',
-  'Sec-Fetch-Dest': 'document',
-  'Sec-Fetch-Mode': 'navigate',
-  'Sec-Fetch-Site': 'none'
+  'Accept-Language': 'en-US,en;q=0.9'
 };
 
 function formatDuration(seconds) {
@@ -101,6 +98,35 @@ app.post('/api/convert', async (req, res) => {
       success: false,
       error: "An error occurred while converting the TikTok video."
     });
+  }
+});
+
+// DOWNLOAD PROXY ROUTE
+app.get('/api/download', async (req, res) => {
+  const { videoUrl } = req.query;
+
+  if (!videoUrl) {
+    return res.status(400).send('Missing video URL.');
+  }
+
+  try {
+    const response = await axios({
+      method: 'get',
+      url: decodeURIComponent(videoUrl),
+      responseType: 'stream',
+      headers: {
+        'User-Agent': HEADERS['User-Agent'],
+        'Referer': 'https://www.tiktok.com/'
+      }
+    });
+
+    res.setHeader('Content-Type', 'video/mp4');
+    res.setHeader('Content-Disposition', 'attachment; filename="tiktok_video.mp4"');
+
+    response.data.pipe(res);
+  } catch (error) {
+    console.error('Download Proxy Error:', error.message);
+    res.status(500).send('Failed to stream video.');
   }
 });
 

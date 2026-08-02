@@ -305,7 +305,9 @@
         videoDuration.textContent = data.duration;
         videoAuthor.textContent = data.author;
         videoTitle.textContent = data.title;
-        downloadBtn.href = data.downloadUrl;
+
+        // Link directly to the server's download proxy route
+        downloadBtn.href = `/api/download?videoUrl=${encodeURIComponent(data.downloadUrl)}`;
 
         // Reveal Result
         resultCard.classList.remove('hidden');
